@@ -3,6 +3,7 @@ package benchmarks
 import org.openjdk.jmh.annotations._
 
 import java.util.concurrent.TimeUnit
+import scala.annotation.tailrec
 
 @State(Scope.Thread)
 @BenchmarkMode(Array(Mode.Throughput))
@@ -39,6 +40,7 @@ class Benchmarks {
     catsChainedFork()
   }
 
+  // MEMO: catsEffect3RuntimeYieldMany とほぼ同じ. shiftをしてないのがdiffかな
   @Benchmark
   def catsEffect3RuntimeForkMany(): Int = {
     import cats.effect.IO
@@ -124,17 +126,21 @@ class Benchmarks {
 
       def catsEffectRepeat[A](n: Int)(io: IO[A]): IO[A] =
         if (n <= 1) io
+        // MEMO: effectを実行だけして、結果は捨てる
         else io.flatMap(_ => catsEffectRepeat(n - 1)(io))
 
       val io = for {
         deferred <- IO.deferred[Unit]
         ref <- IO.ref(200)
+        // MEMO: 1000回cedeして1回refのmodifyを行うアクション(んで、これを200回iterationする)
         effect =
           catsEffectRepeat(1000)(IO.cede) >> ref
             .modify(n =>
               (n - 1, if (n == 1) deferred.complete(()) else IO.unit)
             )
             .flatten
+        // TODO: ここのstartってどのタイミングで発火する?
+        //       -> effect.startを200回繰り返しそう(start自体がIO(遅延)を返すようになっている)
         _ <- catsEffectRepeat(200)(effect.start)
         _ <- deferred.get
       } yield 0
